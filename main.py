@@ -1756,7 +1756,6 @@ class SetupHubView(discord.ui.View):
         self.build_action_buttons()
 
     def build_action_buttons(self) -> None:
-        # Clear existing buttons on row 1
         self.children = [item for item in self.children if item.row != 1]
 
         if self.section in {"ticket", "automod", "welcome", "logs", "minecraft", "voice"}:
@@ -1785,7 +1784,7 @@ class SetupHubView(discord.ui.View):
         await interaction.response.send_message("Only the person who opened this dashboard can use it.", ephemeral=True)
         return False
 
-    async def refresh_message((self) -> None:
+    async def refresh_message(self) -> None:
         if self.message:
             self.build_action_buttons()
             embed = await setup_embed(self.guild, self.section)
@@ -1836,160 +1835,31 @@ class SetupHubView(discord.ui.View):
 
     async def toggle_247(self, interaction: discord.Interaction) -> None:
         member = interaction.user
-        if not isinstance(member, discord.Member) or not member.voice or not member.voice.channel:
-            await interaction.response.send_message("Join a voice channel first to toggle 24/7 mode.", ephemeral=True)
+        if not isinstance(member, discord.Member):
+            await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
             return
+
         state = await get_music_state(self.guild.id)
-        target = None if state.afk_247 else member.voice.channel
-        try:
-            await set_voice_247(self.guild, target, not state.afk_247)
-            status_text = "enabled" if state.afk_247 else "disabled"
-            await interaction.response.send_message(f"24/7 Voice mode **{status_text}**.", ephemeral=True)
-            await self.refresh_message()
-        except Exception as exc:
-            await interaction.response.send_message(f"Could not toggle 24/7 mode: {exc}", ephemeral=True)
+        current_247 = state.afk_247
+        target_channel = member.voice.channel if member.voice and isinstance(member.voice.channel, discord.VoiceChannel) else None
 
-
-# ==================== PREFIX COMMANDS ====================
-
-@bot.command(name="help", brief="General", usage="help [category]")
-async def help_cmd(ctx: commands.Context, category: str = "all") -> None:
-    view = HelpMenuView(ctx.author.id, category=category.lower())
-    embed = view.make_embed()
-    view.message = await ctx.send(embed=embed, view=view)
-
-
-@bot.command(name="setup", brief="Settings", usage="setup")
-@commands.has_permissions(administrator=True)
-async def setup_cmd(ctx: commands.Context) -> None:
-    if not ctx.guild:
-        return
-    view = SetupHubView(ctx.guild, ctx.author.id)
-    embed = await setup_embed(ctx.guild, "ticket")
-    view.message = await ctx.send(embed=embed, view=view)
-
-
-@bot.command(name="ping", brief="General", usage="ping")
-async def ping_cmd(ctx: commands.Context) -> None:
-    latency = round(bot.latency * 1000)
-    await ctx.send(f"🏓 Pong! Latency: `{latency}ms`")
-
-
-@bot.command(name="join", brief="Music", usage="join")
-async def join_cmd(ctx: commands.Context) -> None:
-    voice = await connect_music_to_member(ctx, move=True, require_speak=True)
-    if voice:
-        await ctx.send(f"Connected to {voice.channel.mention}")
-
-
-@bot.command(name="play", brief="Music", usage="play <query/url>")
-async def play_cmd(ctx: commands.Context, *, query: str) -> None:
-    voice = await connect_music_to_member(ctx, move=True, require_speak=True)
-    if not voice:
-        return
-    msg = await ctx.send("🔍 Searching YouTube...")
-    try:
-        track = await asyncio.to_thread(extract_music_track, query, ctx.author.id, ctx.channel.id)
-        state = await get_music_state(ctx.guild.id)
-        if len(state.queue) >= MAX_MUSIC_QUEUE:
-            await msg.edit(content="The queue is currently full!")
+        if not current_247 and not target_channel:
+            await interaction.response.send_message("Join a voice channel first before enabling 24/7 mode.", ephemeral=True)
             return
-        state.queue.append(track)
-        if not voice.is_playing() and not voice.is_paused():
-            await msg.delete()
-            await start_next_music_track(ctx.guild.id)
-        else:
-            await msg.edit(
-                content=None,
-                embed=make_embed(
-                    "Track Queued",
-                    f"**[{track.title}]({track.webpage_url})**\nDuration: `{format_duration(track.duration)}`",
-                ),
-            )
-    except Exception as exc:
-        await msg.edit(content=f"❌ Error: {exc}")
 
+        try:
+            await set_voice_247(self.guild, target_channel, not current_247)
+            status_text = "enabled" if not current_247 else "disabled"
+            await interaction.response.send_message(f"24/7 Voice reconnection is now **{status_text}**.", ephemeral=True)
+            await self.refresh_message()
+        except ValueError as err:
+            await interaction.response.send_message(str(err), ephemeral=True)
 
-@bot.command(name="stop", brief="Music", usage="stop")
-async def stop_cmd(ctx: commands.Context) -> None:
-    state = await get_music_state(ctx.guild.id)
-    state.queue.clear()
-    state.current = None
-    voice = ctx.guild.voice_client if ctx.guild else None
-    if voice and voice.is_connected():
-        voice.stop()
-        if not state.afk_247:
-            await voice.disconnect()
-    await ctx.send("⏹️ Stopped playback and cleared the queue.")
-
-
-@bot.command(name="skip", brief="Music", usage="skip")
-async def skip_cmd(ctx: commands.Context) -> None:
-    state = await get_music_state(ctx.guild.id)
-    voice = ctx.guild.voice_client if ctx.guild else None
-    if voice and voice.is_playing():
-        state.skip_current = True
-        voice.stop()
-        await ctx.send("⏭️ Skipped current track.")
-    else:
-        await ctx.send("Nothing is playing to skip.")
-
-
-# ==================== SLASH COMMANDS ====================
-
-@bot.tree.command(name="ping", description="Check bot latency")
-async def slash_ping(interaction: discord.Interaction) -> None:
-    await interaction.response.send_message(f"🏓 Pong! Latency: `{round(bot.latency * 1000)}ms`", ephemeral=True)
-
-
-@bot.tree.command(name="kick", description="Kick a member from the server")
-@app_commands.checks.has_permissions(kick_members=True)
-async def slash_kick(interaction: discord.Interaction, member: discord.Member, reason: str | None = None) -> None:
-    block = moderation_block_reason(interaction, member)
-    if block:
-        await interaction.response.send_message(block, ephemeral=True)
-        return
-    r = clean_reason(reason)
-    await member.kick(reason=r)
-    await interaction.response.send_message(f"👢 Kicked {member.mention} | Reason: {r}")
-    await log_action(interaction.guild, "Member Kicked", f"User: {member.mention}\nReason: {r}", moderator=interaction.user)
-
-
-@bot.tree.command(name="ban", description="Ban a member from the server")
-@app_commands.checks.has_permissions(ban_members=True)
-async def slash_ban(interaction: discord.Interaction, member: discord.Member, reason: str | None = None) -> None:
-    block = moderation_block_reason(interaction, member)
-    if block:
-        await interaction.response.send_message(block, ephemeral=True)
-        return
-    r = clean_reason(reason)
-    await member.ban(reason=r)
-    await interaction.response.send_message(f"🔨 Banned {member.mention} | Reason: {r}")
-    await log_action(interaction.guild, "Member Banned", f"User: {member.mention}\nReason: {r}", moderator=interaction.user)
-
-
-@bot.tree.command(name="timeout", description="Timeout/Mute a member")
-@app_commands.checks.has_permissions(moderate_members=True)
-async def slash_timeout(interaction: discord.Interaction, member: discord.Member, minutes: int, reason: str | None = None) -> None:
-    block = moderation_block_reason(interaction, member)
-    if block:
-        await interaction.response.send_message(block, ephemeral=True)
-        return
-    if minutes <= 0 or minutes > MAX_TIMEOUT_MINUTES:
-        await interaction.response.send_message("Duration must be between 1 minute and 28 days.", ephemeral=True)
-        return
-    r = clean_reason(reason)
-    await member.timeout(timedelta(minutes=minutes), reason=r)
-    await interaction.response.send_message(f"🔇 Timed out {member.mention} for {minutes}m | Reason: {r}")
-    await log_action(interaction.guild, "Member Timeout", f"User: {member.mention}\nDuration: {minutes}m\nReason: {r}", moderator=interaction.user)
-
-
-# ==================== MAIN EXECUTION ====================
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     token = os.getenv("DISCORD_TOKEN")
     if not token:
-        log.error("DISCORD_TOKEN environment variable is missing!")
+        log.error("DISCORD_TOKEN environment variable is not set. Exiting...")
     else:
         bot.run(token)
