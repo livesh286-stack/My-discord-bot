@@ -1482,7 +1482,7 @@ async def setup_embed(guild: discord.Guild, section: str) -> discord.Embed:
 
 
 class SetupModal(discord.ui.Modal):
-    def __init__(self, parent: "SetupHubView", title: str) -> None:
+    def __init__(self, parent: SetupHubView, title: str) -> None:
         super().__init__(title=title, timeout=300)
         self.parent = parent
 
@@ -1495,7 +1495,7 @@ class SetupModal(discord.ui.Modal):
 
 
 class TicketSetupModal(SetupModal):
-    def __init__(self, parent: "SetupHubView") -> None:
+    def __init__(self, parent: SetupHubView) -> None:
         super().__init__(parent, "Configure ticket system")
         self.category = discord.ui.TextInput(
             label="Ticket category ID or mention",
@@ -1543,7 +1543,7 @@ class TicketSetupModal(SetupModal):
 
 
 class AutoModSetupModal(SetupModal):
-    def __init__(self, parent: "SetupHubView") -> None:
+    def __init__(self, parent: SetupHubView) -> None:
         super().__init__(parent, "Configure AutoMod")
         self.words = discord.ui.TextInput(
             label="Blocked words or phrases (comma separated)",
@@ -1587,7 +1587,7 @@ class AutoModSetupModal(SetupModal):
 
 
 class WelcomeSetupModal(SetupModal):
-    def __init__(self, parent: "SetupHubView") -> None:
+    def __init__(self, parent: SetupHubView) -> None:
         super().__init__(parent, "Configure welcome messages")
         self.channel = discord.ui.TextInput(
             label="Welcome channel ID or mention",
@@ -1618,7 +1618,7 @@ class WelcomeSetupModal(SetupModal):
 
 
 class LogsSetupModal(SetupModal):
-    def __init__(self, parent: "SetupHubView") -> None:
+    def __init__(self, parent: SetupHubView) -> None:
         super().__init__(parent, "Configure moderation logs")
         self.channel = discord.ui.TextInput(
             label="Log channel ID or mention",
@@ -1640,7 +1640,7 @@ class LogsSetupModal(SetupModal):
 
 
 class MinecraftSetupModal(SetupModal):
-    def __init__(self, parent: "SetupHubView") -> None:
+    def __init__(self, parent: SetupHubView) -> None:
         super().__init__(parent, "Configure Minecraft monitor")
         self.address = discord.ui.TextInput(
             label="Minecraft IP or hostname",
@@ -1693,7 +1693,7 @@ class MinecraftSetupModal(SetupModal):
 
 
 class VoiceSetupModal(SetupModal):
-    def __init__(self, parent: "SetupHubView") -> None:
+    def __init__(self, parent: SetupHubView) -> None:
         super().__init__(parent, "Configure voice and music")
         self.volume = discord.ui.TextInput(
             label="Default music volume (0-200%)",
@@ -1836,30 +1836,194 @@ class SetupHubView(discord.ui.View):
     async def toggle_247(self, interaction: discord.Interaction) -> None:
         member = interaction.user
         if not isinstance(member, discord.Member):
-            await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+            await interaction.response.send_message("Must be used in a server.", ephemeral=True)
             return
-
+        voice_state = member.voice
+        channel = voice_state.channel if voice_state and isinstance(voice_state.channel, discord.VoiceChannel) else None
         state = await get_music_state(self.guild.id)
-        current_247 = state.afk_247
-        target_channel = member.voice.channel if member.voice and isinstance(member.voice.channel, discord.VoiceChannel) else None
+        try:
+            await set_voice_247(self.guild, channel, not state.afk_247)
+            status_text = "enabled" if state.afk_247 else "disabled"
+            await interaction.response.send_message(f"24/7 mode is now **{status_text}**.", ephemeral=True)
+        except ValueError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+        await self.refresh_message()
 
-        if not current_247 and not target_channel:
-            await interaction.response.send_message("Join a voice channel first before enabling 24/7 mode.", ephemeral=True)
+
+# --- Prefix Commands ---
+
+@bot.command(name="help", brief="General", usage="help [command_or_category]")
+async def help_cmd(ctx: commands.Context[SentinelBot], *, query: str | None = None) -> None:
+    if query:
+        clean_query = query.strip().casefold()
+        cat_match = next((val for val, label, _ in HelpMenuView.CATEGORIES if val == clean_query or label.casefold() == clean_query), None)
+        if cat_match:
+            view = HelpMenuView(ctx.author.id, category=cat_match)
+            view.message = await ctx.send(embed=view.make_embed(), view=view)
             return
 
-        try:
-            await set_voice_247(self.guild, target_channel, not current_247)
-            status_text = "enabled" if not current_247 else "disabled"
-            await interaction.response.send_message(f"24/7 Voice reconnection is now **{status_text}**.", ephemeral=True)
-            await self.refresh_message()
-        except ValueError as err:
-            await interaction.response.send_message(str(err), ephemeral=True)
+        cmd = bot.get_command(clean_query)
+        if cmd:
+            embed = make_embed(
+                f"Command: ${cmd.name}",
+                f"**Usage:** `${cmd.usage or cmd.name}`\n"
+                f"**Category:** {cmd.brief or 'General'}\n\n"
+                f"{cmd.help or 'No description available.'}"
+            )
+            await ctx.send(embed=embed)
+            return
+
+        await ctx.send(f"No command or category found matching `{query}`.")
+        return
+
+    view = HelpMenuView(ctx.author.id)
+    view.message = await ctx.send(embed=view.make_embed(), view=view)
+
+
+@bot.command(name="setup", brief="Settings", usage="setup")
+@commands.has_permissions(administrator=True)
+async def setup_cmd(ctx: commands.Context[SentinelBot]) -> None:
+    if not ctx.guild:
+        return
+    view = SetupHubView(ctx.guild, ctx.author.id)
+    embed = await setup_embed(ctx.guild, view.section)
+    view.message = await ctx.send(embed=embed, view=view)
+
+
+@bot.command(name="ping", brief="General", usage="ping")
+async def ping_cmd(ctx: commands.Context[SentinelBot]) -> None:
+    latency = round(bot.latency * 1000)
+    await ctx.send(embed=make_embed("Pong! 🏓", f"WebSocket Latency: `{latency}ms`"))
+
+
+# --- Music Prefix Commands ---
+
+@bot.command(name="join", brief="Music", usage="join")
+async def join_cmd(ctx: commands.Context[SentinelBot]) -> None:
+    voice = await connect_music_to_member(ctx, move=True)
+    if voice:
+        await ctx.send(embed=make_embed("Voice Connected", f"Connected to {voice.channel.mention}."))
+
+
+@bot.command(name="play", brief="Music", usage="play <song name or link>")
+async def play_cmd(ctx: commands.Context[SentinelBot], *, query: str) -> None:
+    if not ctx.guild:
+        return
+    voice = await connect_music_to_member(ctx, move=False)
+    if not voice:
+        return
+
+    state = await get_music_state(ctx.guild.id)
+    if len(state.queue) >= MAX_MUSIC_QUEUE:
+        await ctx.send(f"The queue is full (max {MAX_MUSIC_QUEUE} tracks).")
+        return
+
+    msg = await ctx.send("🔎 Searching for track...")
+    try:
+        track = await asyncio.to_thread(extract_music_track, query, ctx.author.id, ctx.channel.id)
+        state.queue.append(track)
+        await msg.delete()
+        if voice.is_playing() or voice.is_paused():
+            embed = make_embed(
+                "Track Queued",
+                f"**[{track.title}]({track.webpage_url})**\nPosition in queue: `{len(state.queue)}`",
+                color=discord.Colour.blue(),
+            )
+            await ctx.send(embed=embed)
+        else:
+            await start_next_music_track(ctx.guild.id)
+    except Exception as exc:
+        await msg.edit(content=f"❌ Could not add song: {exc}")
+
+
+@bot.command(name="skip", brief="Music", usage="skip")
+async def skip_cmd(ctx: commands.Context[SentinelBot]) -> None:
+    if not ctx.guild or not ctx.guild.voice_client:
+        await ctx.send("I am not connected to a voice channel.")
+        return
+    voice = ctx.guild.voice_client
+    if not voice.is_playing():
+        await ctx.send("Nothing is currently playing.")
+        return
+
+    state = await get_music_state(ctx.guild.id)
+    state.skip_current = True
+    voice.stop()
+    await ctx.send("⏭️ Skipped current track.")
+
+
+@bot.command(name="stop", brief="Music", usage="stop")
+async def stop_cmd(ctx: commands.Context[SentinelBot]) -> None:
+    if not ctx.guild or not ctx.guild.voice_client:
+        await ctx.send("I am not connected to a voice channel.")
+        return
+
+    state = await get_music_state(ctx.guild.id)
+    state.queue.clear()
+    state.current = None
+    ctx.guild.voice_client.stop()
+    await ctx.send("⏹️ Stopped playback and cleared the queue.")
+
+
+@bot.command(name="leave", brief="Music", usage="leave")
+async def leave_cmd(ctx: commands.Context[SentinelBot]) -> None:
+    if not ctx.guild or not ctx.guild.voice_client:
+        await ctx.send("I am not connected to a voice channel.")
+        return
+
+    state = await get_music_state(ctx.guild.id)
+    state.queue.clear()
+    state.current = None
+    state.afk_247 = False
+    await db_execute("DELETE FROM voice_settings WHERE guild_id = ?", (ctx.guild.id,))
+    await ctx.guild.voice_client.disconnect(force=True)
+    await ctx.send("Disconnected from voice and cleared 24/7 settings.")
+
+
+@bot.command(name="queue", brief="Music", usage="queue")
+async def queue_cmd(ctx: commands.Context[SentinelBot]) -> None:
+    if not ctx.guild:
+        return
+    state = await get_music_state(ctx.guild.id)
+    lines = []
+    if state.current:
+        lines.append(f"**Now Playing:** [{state.current.title}]({state.current.webpage_url})")
+    else:
+        lines.append("Nothing is currently playing.")
+
+    if state.queue:
+        lines.append("\n**Up Next:**")
+        for i, track in enumerate(list(state.queue)[:10], start=1):
+            lines.append(f"`{i}.` [{track.title}]({track.webpage_url})")
+        if len(state.queue) > 10:
+            lines.append(f"*...and {len(state.queue) - 10} more.*")
+
+    embed = make_embed("Music Queue", "\n".join(lines))
+    await ctx.send(embed=embed)
+
+
+# --- Slash Commands ---
+
+@bot.tree.command(name="ping", description="Check bot response latency.")
+async def ping_slash(interaction: discord.Interaction) -> None:
+    latency = round(bot.latency * 1000)
+    await respond(interaction, embed=make_embed("Pong! 🏓", f"WebSocket Latency: `{latency}ms`"))
+
+
+@bot.tree.command(name="calc", description="Perform basic arithmetic calculations.")
+@app_commands.describe(expression="Arithmetic expression (e.g. 12 + 4 * 2)")
+async def calc_slash(interaction: discord.Interaction, expression: str) -> None:
+    try:
+        result = safe_calc(expression)
+        await respond(interaction, embed=make_embed("Calculator", f"**Input:** `{expression}`\n**Result:** `{result}`"))
+    except Exception as exc:
+        await respond(interaction, f"❌ Calculation error: {exc}", ephemeral=True)
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
     token = os.getenv("DISCORD_TOKEN")
     if not token:
-        log.error("DISCORD_TOKEN environment variable is not set. Exiting...")
+        log.critical("DISCORD_TOKEN environment variable is missing!")
     else:
+        logging.basicConfig(level=logging.INFO)
         bot.run(token)
