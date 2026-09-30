@@ -1,19 +1,18 @@
-# --- Core Dependencies ---
-requests>=2.31.0
-python-dotenv>=1.0.0
-
-# --- Web Frameworks ---
-flask>=3.0.0
-# fastapi>=0.109.0
-# uvicorn>=0.27.0
-
-# --- Discord Bot Development (discord.py) ---
+# --- Discord Bot Core & Async Database ---
 discord.py>=2.3.2
+aiohttp>=3.9.0
+aiosqlite>=0.19.0
+audioop-lts>=0.2.1
 
-# --- Data Science & Utilities ---
+# --- Web Frameworks & Utilities ---
+flask>=3.0.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# --- Data Handling & Analytics ---
 numpy>=1.26.0
 pandas>=2.2.0
 
-# --- Development & Testing ---
+# --- Testing & Code Formatting ---
 pytest>=8.0.0
 black>=24.1.0
