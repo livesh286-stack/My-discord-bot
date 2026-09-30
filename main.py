@@ -1725,86 +1725,85 @@ class VoiceSetupModal(SetupModal):
 
 class SetupHubView(discord.ui.View):
     SECTIONS = (
-        ("ticket", "Tickets", "Ticket category, support role, transcripts, and panel."),
-        ("automod", "AutoMod", "Blocked words, links, invites, and anti-spam."),
-        ("welcome", "Welcome", "Welcome channel, copy, and placeholders."),
-        ("logs", "Logs", "Moderation and member event log channel."),
-        ("minecraft", "Minecraft", "IP, port, edition, and live 3-minute monitor."),
-        ("voice", "Voice", "Music playback, default volume, and 24/7 voice reconnect."),
-        ("moderation", "Moderation", "Permission and role-hierarchy overview."),
+        ("ticket", "Tickets", "Configure panel category, staff role, and logs."),
+        ("automod", "AutoMod", "Set up blocked words, spam thresholds, and filters."),
+        ("welcome", "Welcome", "Set welcome message channel and text."),
+        ("logs", "Logs", "Choose moderation log channel."),
+        ("minecraft", "Minecraft", "Configure live Minecraft status monitor."),
+        ("voice", "Voice", "Set default music volume and 24/7 settings."),
+        ("moderation", "Moderation", "View moderation system overview."),
     )
 
-    def __init__(self, owner_id: int) -> None:
+    def __init__(self, guild: discord.Guild, owner_id: int, section: str = "ticket") -> None:
         super().__init__(timeout=300)
+        self.guild = guild
         self.owner_id = owner_id
-        self.section = "ticket"
+        self.section = section
         self.message: discord.Message | None = None
-        self.select = discord.ui.Select(
-            placeholder="Choose a feature to configure...",
+
+        self.section_select = discord.ui.Select(
+            placeholder="Choose a module...",
+            min_values=1,
+            max_values=1,
             options=[
-                discord.SelectOption(label=label, value=value, description=description, default=value == self.section)
-                for value, label, description in self.SECTIONS
+                discord.SelectOption(label=label, value=val, description=desc, default=val == self.section)
+                for val, label, desc in self.SECTIONS
             ],
             row=0,
         )
-        self.select.callback = self.select_section
-        self.add_item(self.select)
-        self.configure_button = discord.ui.Button(label="Configure", style=discord.ButtonStyle.primary, row=1)
-        self.configure_button.callback = self.configure
-        self.add_item(self.configure_button)
-        self.action_button = discord.ui.Button(label="Post Panel", style=discord.ButtonStyle.secondary, row=1)
-        self.action_button.callback = self.action
-        self.add_item(self.action_button)
-        self.refresh_button = discord.ui.Button(label="Refresh", style=discord.ButtonStyle.success, row=2)
-        self.refresh_button.callback = self.refresh
-        self.add_item(self.refresh_button)
-        self.close_button = discord.ui.Button(label="Close", style=discord.ButtonStyle.danger, row=2)
-        self.close_button.callback = self.close
-        self.add_item(self.close_button)
-        self.update_labels()
+        self.section_select.callback = self.select_section
+        self.add_item(self.section_select)
+        self.build_action_buttons()
 
-    def update_labels(self) -> None:
-        labels = {
-            "ticket": ("Configure Ticket", "Post Panel"),
-            "automod": ("Configure AutoMod", "Toggle AutoMod"),
-            "welcome": ("Configure Welcome", "Disable Welcome"),
-            "logs": ("Configure Logs", "Clear Logs"),
-            "minecraft": ("Configure Monitor", "Stop Monitor"),
-            "voice": ("Configure Voice", "Toggle 24/7"),
-            "moderation": ("View Permissions", "Refresh Settings"),
-        }
-        configure, action = labels[self.section]
-        self.configure_button.label = configure
-        self.action_button.label = action
-        self.action_button.disabled = self.section == "moderation"
-        for option in self.select.options:
-            option.default = option.value == self.section
-        self.select.placeholder = f"Configure: {dict((value, label) for value, label, _ in self.SECTIONS)[self.section]}"
+    def build_action_buttons(self) -> None:
+        # Clear existing buttons on row 1
+        self.children = [item for item in self.children if item.row != 1]
 
-    async def refresh_message(self) -> None:
-        if self.message and self.message.guild:
-            self.update_labels()
+        if self.section in {"ticket", "automod", "welcome", "logs", "minecraft", "voice"}:
+            btn_config = discord.ui.Button(label="Configure", style=discord.ButtonStyle.primary, emoji="⚙️", row=1)
+            btn_config.callback = self.open_modal
+            self.add_item(btn_config)
+
+        if self.section == "ticket":
+            btn_panel = discord.ui.Button(label="Post Panel", style=discord.ButtonStyle.success, emoji="📩", row=1)
+            btn_panel.callback = self.post_ticket_panel
+            self.add_item(btn_panel)
+
+        elif self.section == "automod":
+            btn_toggle = discord.ui.Button(label="Toggle AutoMod", style=discord.ButtonStyle.secondary, emoji="🛡️", row=1)
+            btn_toggle.callback = self.toggle_automod
+            self.add_item(btn_toggle)
+
+        elif self.section == "voice":
+            btn_247 = discord.ui.Button(label="Toggle 24/7", style=discord.ButtonStyle.secondary, emoji="📻", row=1)
+            btn_247.callback = self.toggle_247
+            self.add_item(btn_247)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.owner_id:
+            return True
+        await interaction.response.send_message("Only the person who opened this dashboard can use it.", ephemeral=True)
+        return False
+
+    async def refresh_message((self) -> None:
+        if self.message:
+            self.build_action_buttons()
+            embed = await setup_embed(self.guild, self.section)
             try:
-                await self.message.edit(embed=await setup_embed(self.message.guild, self.section), view=self)
+                await self.message.edit(embed=embed, view=self)
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 pass
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message("Only the admin who opened this setup menu can use it.", ephemeral=True)
-            return False
-        if not isinstance(interaction.user, discord.Member) or not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("You need Manage Server permission to use setup controls.", ephemeral=True)
-            return False
-        return True
-
     async def select_section(self, interaction: discord.Interaction) -> None:
-        self.section = self.select.values[0]
-        self.update_labels()
-        await interaction.response.edit_message(embed=await setup_embed(interaction.guild, self.section), view=self)
+        self.section = self.section_select.values[0]
+        for opt in self.section_select.options:
+            opt.default = opt.value == self.section
+        self.build_action_buttons()
+        embed = await setup_embed(self.guild, self.section)
+        await interaction.response.edit_message(embed=embed, view=self)
 
-    async def configure(self, interaction: discord.Interaction) -> None:
-        modals: dict[str, type[SetupModal]] = {
+    async def open_modal(self, interaction: discord.Interaction) -> None:
+        modals = {
             "ticket": TicketSetupModal,
             "automod": AutoModSetupModal,
             "welcome": WelcomeSetupModal,
@@ -1812,310 +1811,185 @@ class SetupHubView(discord.ui.View):
             "minecraft": MinecraftSetupModal,
             "voice": VoiceSetupModal,
         }
-        modal_type = modals.get(self.section)
-        if modal_type:
-            await interaction.response.send_modal(modal_type(self))
-            return
-        await interaction.response.send_message("Moderation uses Discord permissions and role hierarchy automatically.", ephemeral=True)
+        modal_cls = modals.get(self.section)
+        if modal_cls:
+            await interaction.response.send_modal(modal_cls(self))
 
-    async def action(self, interaction: discord.Interaction) -> None:
-        guild = interaction.guild
-        if not guild:
-            await interaction.response.send_message("This setup menu only works in a server.", ephemeral=True)
+    async def post_ticket_panel(self, interaction: discord.Interaction) -> None:
+        category_id = await get_setting(self.guild.id, "ticket_category")
+        if not category_id:
+            await interaction.response.send_message("Please configure the ticket category first.", ephemeral=True)
             return
-        if self.section == "ticket":
-            if not isinstance(interaction.channel, discord.TextChannel):
-                await interaction.response.send_message("Open the setup menu in a text channel.", ephemeral=True)
-                return
-            await interaction.channel.send(
-                embed=make_embed("Need help?", "Press the button below to create a private support ticket."),
-                view=TicketPanelView(bot),
-                allowed_mentions=mention_suppressed(),
-            )
-            await interaction.response.send_message("Ticket panel posted in this channel.", ephemeral=True)
-        elif self.section == "automod":
-            enabled = await get_setting(guild.id, "automod_enabled", "false") == "true"
-            new_state = not enabled
-            await set_setting(guild.id, "automod_enabled", "true" if new_state else "false")
-            await interaction.response.send_message(f"AutoMod is now {'enabled' if new_state else 'disabled'}.", ephemeral=True)
-            await self.refresh_message()
-        elif self.section == "welcome":
-            await set_setting(guild.id, "welcome_channel", None)
-            await interaction.response.send_message("Welcome messages disabled.", ephemeral=True)
-            await self.refresh_message()
-        elif self.section == "logs":
-            await set_setting(guild.id, "log_channel", None)
-            await interaction.response.send_message("Moderation log channel cleared.", ephemeral=True)
-            await self.refresh_message()
-        elif self.section == "minecraft":
-            await db_execute("DELETE FROM minecraft_monitors WHERE guild_id = ?", (guild.id,))
-            await interaction.response.send_message("Minecraft monitor disabled.", ephemeral=True)
-            await self.refresh_message()
-        elif self.section == "voice":
-            row = await db_fetchone("SELECT afk_247 FROM voice_settings WHERE guild_id = ?", (guild.id,))
-            enabled = bool(row and row["afk_247"])
-            if enabled:
-                await set_voice_247(guild, None, False)
-                await interaction.response.send_message("24/7 voice mode disabled.", ephemeral=True)
-            else:
-                member = interaction.user
-                channel = member.voice.channel if isinstance(member, discord.Member) and member.voice else None
-                if isinstance(channel, discord.VoiceChannel):
-                    try:
-                        await set_voice_247(guild, channel, True)
-                        await interaction.response.send_message(f"24/7 voice mode enabled in {channel.mention}.", ephemeral=True)
-                    except ValueError as exc:
-                        await interaction.response.send_message(str(exc), ephemeral=True)
-                else:
-                    await interaction.response.send_message("Join a voice channel first to enable 24/7 mode.", ephemeral=True)
-            await self.refresh_message()
+        channel = interaction.channel
+        if isinstance(channel, discord.TextChannel):
+            embed = make_embed("Support Tickets", "Click the button below to open a private support ticket.")
+            await channel.send(embed=embed, view=TicketPanelView(bot))
+            await interaction.response.send_message("Ticket panel posted successfully!", ephemeral=True)
 
-    async def refresh(self, interaction: discord.Interaction) -> None:
-        await interaction.response.defer(ephemeral=True)
+    async def toggle_automod(self, interaction: discord.Interaction) -> None:
+        current = await get_setting(self.guild.id, "automod_enabled", "false") == "true"
+        new_val = "false" if current else "true"
+        await set_setting(self.guild.id, "automod_enabled", new_val)
+        status_text = "enabled" if new_val == "true" else "disabled"
+        await interaction.response.send_message(f"AutoMod is now **{status_text}**.", ephemeral=True)
         await self.refresh_message()
 
-    async def close(self, interaction: discord.Interaction) -> None:
-        for item in self.children:
-            item.disabled = True
-        await interaction.response.edit_message(view=self)
-
-    async def on_timeout(self) -> None:
-        for item in self.children:
-            item.disabled = True
-        if self.message:
-            try:
-                await self.message.edit(view=self)
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                pass
-
-
-# -----------------------------------------------------------------------------
-# COMMANDS & SLASH COMMANDS
-# -----------------------------------------------------------------------------
-
-@bot.command(name="help", brief="General", usage="help [category|command]")
-async def help_cmd(ctx: commands.Context[SentinelBot], *, query: str | None = None) -> None:
-    if query:
-        query_clean = query.strip().lower()
-        cmd = bot.get_command(query_clean)
-        if cmd:
-            embed = make_embed(
-                f"Command: ${cmd.name}",
-                f"**Category:** {cmd.brief or 'General'}\n"
-                f"**Usage:** `${cmd.usage or cmd.name}`\n\n"
-                f"{cmd.help or 'No description provided.'}",
-            )
-            await ctx.send(embed=embed)
+    async def toggle_247(self, interaction: discord.Interaction) -> None:
+        member = interaction.user
+        if not isinstance(member, discord.Member) or not member.voice or not member.voice.channel:
+            await interaction.response.send_message("Join a voice channel first to toggle 24/7 mode.", ephemeral=True)
             return
+        state = await get_music_state(self.guild.id)
+        target = None if state.afk_247 else member.voice.channel
+        try:
+            await set_voice_247(self.guild, target, not state.afk_247)
+            status_text = "enabled" if state.afk_247 else "disabled"
+            await interaction.response.send_message(f"24/7 Voice mode **{status_text}**.", ephemeral=True)
+            await self.refresh_message()
+        except Exception as exc:
+            await interaction.response.send_message(f"Could not toggle 24/7 mode: {exc}", ephemeral=True)
 
-    view = HelpMenuView(ctx.author.id, category="all")
+
+# ==================== PREFIX COMMANDS ====================
+
+@bot.command(name="help", brief="General", usage="help [category]")
+async def help_cmd(ctx: commands.Context, category: str = "all") -> None:
+    view = HelpMenuView(ctx.author.id, category=category.lower())
     embed = view.make_embed()
     view.message = await ctx.send(embed=embed, view=view)
 
 
 @bot.command(name="setup", brief="Settings", usage="setup")
-@commands.has_permissions(manage_guild=True)
-async def setup_cmd(ctx: commands.Context[SentinelBot]) -> None:
-    if ctx.guild is None:
-        await ctx.send("This command can only be used in a server.")
+@commands.has_permissions(administrator=True)
+async def setup_cmd(ctx: commands.Context) -> None:
+    if not ctx.guild:
         return
-    view = SetupHubView(ctx.author.id)
-    embed = await setup_embed(ctx.guild, view.section)
+    view = SetupHubView(ctx.guild, ctx.author.id)
+    embed = await setup_embed(ctx.guild, "ticket")
     view.message = await ctx.send(embed=embed, view=view)
 
 
-@bot.command(name="kick", brief="Moderation", usage="kick <member> [reason]")
-@commands.has_permissions(kick_members=True)
-async def kick_cmd(ctx: commands.Context[SentinelBot], member: discord.Member, *, reason: str | None = None) -> None:
-    if ctx.guild is None:
-        return
-    reason_clean = clean_reason(reason)
-    if block := moderation_block_reason(ctx, member):
-        await ctx.send(f"❌ {block}")
-        return
-    try:
-        await member.kick(reason=reason_clean)
-        await ctx.send(f"✅ **{member}** was kicked. Reason: `{reason_clean}`")
-        await log_action(ctx.guild, "Member Kicked", f"User: {member.mention} (`{member.id}`)\nReason: {reason_clean}", moderator=ctx.author)
-    except discord.Forbidden:
-        await ctx.send("❌ I don't have permission to kick this member.")
-
-
-@bot.command(name="ban", brief="Moderation", usage="ban <member> [reason]")
-@commands.has_permissions(ban_members=True)
-async def ban_cmd(ctx: commands.Context[SentinelBot], member: discord.Member, *, reason: str | None = None) -> None:
-    if ctx.guild is None:
-        return
-    reason_clean = clean_reason(reason)
-    if block := moderation_block_reason(ctx, member):
-        await ctx.send(f"❌ {block}")
-        return
-    try:
-        await member.ban(reason=reason_clean, delete_message_days=0)
-        await ctx.send(f"✅ **{member}** was banned. Reason: `{reason_clean}`")
-        await log_action(ctx.guild, "Member Banned", f"User: {member.mention} (`{member.id}`)\nReason: {reason_clean}", moderator=ctx.author)
-    except discord.Forbidden:
-        await ctx.send("❌ I don't have permission to ban this member.")
-
-
-@bot.command(name="warn", brief="Moderation", usage="warn <member> [reason]")
-@commands.has_permissions(manage_messages=True)
-async def warn_cmd(ctx: commands.Context[SentinelBot], member: discord.Member, *, reason: str | None = None) -> None:
-    if ctx.guild is None:
-        return
-    reason_clean = clean_reason(reason)
-    await db_execute(
-        "INSERT INTO warnings (guild_id, user_id, moderator_id, reason, created_at) VALUES (?, ?, ?, ?, ?)",
-        (ctx.guild.id, member.id, ctx.author.id, reason_clean, utc_now().isoformat()),
-    )
-    await ctx.send(f"⚠️ Warned **{member}**. Reason: `{reason_clean}`")
-    await log_action(ctx.guild, "Member Warned", f"User: {member.mention}\nReason: {reason_clean}", moderator=ctx.author)
-
-
-@bot.command(name="warnings", brief="Moderation", usage="warnings <member>")
-async def warnings_cmd(ctx: commands.Context[SentinelBot], member: discord.Member) -> None:
-    if ctx.guild is None:
-        return
-    rows = await db_fetchall(
-        "SELECT id, reason, created_at FROM warnings WHERE guild_id = ? AND user_id = ? AND active = 1",
-        (ctx.guild.id, member.id),
-    )
-    if not rows:
-        await ctx.send(f"**{member}** has no active warnings.")
-        return
-    lines = [f"`#{row['id']}` - {row['reason']} (<t:{int(datetime.fromisoformat(row['created_at']).timestamp())}:R>)" for row in rows]
-    embed = make_embed(f"Warnings for {member}", "\n".join(lines))
-    await ctx.send(embed=embed)
-
-
-@bot.command(name="purge", brief="Moderation", usage="purge <amount>")
-@commands.has_permissions(manage_messages=True)
-async def purge_cmd(ctx: commands.Context[SentinelBot], amount: int) -> None:
-    if ctx.guild is None or not isinstance(ctx.channel, discord.TextChannel):
-        return
-    if amount < 1 or amount > 100:
-        await ctx.send("Please specify an amount between 1 and 100.")
-        return
-    deleted = await ctx.channel.purge(limit=amount + 1)
-    msg = await ctx.send(f"🧹 Purged `{len(deleted) - 1}` messages.")
-    await asyncio.sleep(3)
-    try:
-        await msg.delete()
-    except discord.HTTPException:
-        pass
+@bot.command(name="ping", brief="General", usage="ping")
+async def ping_cmd(ctx: commands.Context) -> None:
+    latency = round(bot.latency * 1000)
+    await ctx.send(f"🏓 Pong! Latency: `{latency}ms`")
 
 
 @bot.command(name="join", brief="Music", usage="join")
-async def join_cmd(ctx: commands.Context[SentinelBot]) -> None:
-    voice = await connect_music_to_member(ctx, move=True, require_speak=False)
+async def join_cmd(ctx: commands.Context) -> None:
+    voice = await connect_music_to_member(ctx, move=True, require_speak=True)
     if voice:
-        await ctx.send(f"Connected to {voice.channel.mention}.")
+        await ctx.send(f"Connected to {voice.channel.mention}")
 
 
-@bot.command(name="play", brief="Music", usage="play <search or url>")
-async def play_cmd(ctx: commands.Context[SentinelBot], *, query: str) -> None:
-    if ctx.guild is None:
-        return
+@bot.command(name="play", brief="Music", usage="play <query/url>")
+async def play_cmd(ctx: commands.Context, *, query: str) -> None:
     voice = await connect_music_to_member(ctx, move=True, require_speak=True)
     if not voice:
         return
-    state = await get_music_state(ctx.guild.id)
-    if len(state.queue) >= MAX_MUSIC_QUEUE:
-        await ctx.send(f"The music queue is full (max {MAX_MUSIC_QUEUE} tracks).")
-        return
-
     msg = await ctx.send("🔍 Searching YouTube...")
     try:
         track = await asyncio.to_thread(extract_music_track, query, ctx.author.id, ctx.channel.id)
+        state = await get_music_state(ctx.guild.id)
+        if len(state.queue) >= MAX_MUSIC_QUEUE:
+            await msg.edit(content="The queue is currently full!")
+            return
         state.queue.append(track)
-        await msg.edit(content=f"🎵 Added **[{track.title}]({track.webpage_url})** to the queue.")
-        await start_next_music_track(ctx.guild.id)
-    except ValueError as exc:
-        await msg.edit(content=f"❌ {exc}")
-
-
-@bot.command(name="skip", brief="Music", usage="skip")
-async def skip_cmd(ctx: commands.Context[SentinelBot]) -> None:
-    if ctx.guild is None or ctx.guild.voice_client is None:
-        await ctx.send("Not connected to voice.")
-        return
-    state = await get_music_state(ctx.guild.id)
-    if not state.current:
-        await ctx.send("Nothing is currently playing.")
-        return
-    state.skip_current = True
-    ctx.guild.voice_client.stop()
-    await ctx.send("⏭️ Skipped current track.")
+        if not voice.is_playing() and not voice.is_paused():
+            await msg.delete()
+            await start_next_music_track(ctx.guild.id)
+        else:
+            await msg.edit(
+                content=None,
+                embed=make_embed(
+                    "Track Queued",
+                    f"**[{track.title}]({track.webpage_url})**\nDuration: `{format_duration(track.duration)}`",
+                ),
+            )
+    except Exception as exc:
+        await msg.edit(content=f"❌ Error: {exc}")
 
 
 @bot.command(name="stop", brief="Music", usage="stop")
-async def stop_cmd(ctx: commands.Context[SentinelBot]) -> None:
-    if ctx.guild is None:
-        return
+async def stop_cmd(ctx: commands.Context) -> None:
     state = await get_music_state(ctx.guild.id)
     state.queue.clear()
     state.current = None
-    if ctx.guild.voice_client:
-        await ctx.guild.voice_client.disconnect(force=True)
-    await ctx.send("⏹️ Stopped music playback and cleared queue.")
+    voice = ctx.guild.voice_client if ctx.guild else None
+    if voice and voice.is_connected():
+        voice.stop()
+        if not state.afk_247:
+            await voice.disconnect()
+    await ctx.send("⏹️ Stopped playback and cleared the queue.")
 
 
-@bot.command(name="queue", brief="Music", usage="queue")
-async def queue_cmd(ctx: commands.Context[SentinelBot]) -> None:
-    if ctx.guild is None:
-        return
+@bot.command(name="skip", brief="Music", usage="skip")
+async def skip_cmd(ctx: commands.Context) -> None:
     state = await get_music_state(ctx.guild.id)
-    if not state.current and not state.queue:
-        await ctx.send("The music queue is empty.")
+    voice = ctx.guild.voice_client if ctx.guild else None
+    if voice and voice.is_playing():
+        state.skip_current = True
+        voice.stop()
+        await ctx.send("⏭️ Skipped current track.")
+    else:
+        await ctx.send("Nothing is playing to skip.")
+
+
+# ==================== SLASH COMMANDS ====================
+
+@bot.tree.command(name="ping", description="Check bot latency")
+async def slash_ping(interaction: discord.Interaction) -> None:
+    await interaction.response.send_message(f"🏓 Pong! Latency: `{round(bot.latency * 1000)}ms`", ephemeral=True)
+
+
+@bot.tree.command(name="kick", description="Kick a member from the server")
+@app_commands.checks.has_permissions(kick_members=True)
+async def slash_kick(interaction: discord.Interaction, member: discord.Member, reason: str | None = None) -> None:
+    block = moderation_block_reason(interaction, member)
+    if block:
+        await interaction.response.send_message(block, ephemeral=True)
         return
-
-    description = []
-    if state.current:
-        description.append(f"**Now Playing:** [{state.current.title}]({state.current.webpage_url}) | `{format_duration(state.current.duration)}`")
-    if state.queue:
-        description.append("\n**Up Next:**")
-        for idx, track in enumerate(state.queue, 1):
-            description.append(f"`{idx}.` [{track.title}]({track.webpage_url}) | `{format_duration(track.duration)}`")
-
-    embed = make_embed("Music Queue", "\n".join(description))
-    await ctx.send(embed=embed)
+    r = clean_reason(reason)
+    await member.kick(reason=r)
+    await interaction.response.send_message(f"👢 Kicked {member.mention} | Reason: {r}")
+    await log_action(interaction.guild, "Member Kicked", f"User: {member.mention}\nReason: {r}", moderator=interaction.user)
 
 
-@bot.command(name="calc", brief="Utilities", usage="calc <expression>")
-async def calc_cmd(ctx: commands.Context[SentinelBot], *, expression: str) -> None:
-    try:
-        res = safe_calc(expression)
-        await ctx.send(f"🔢 **Result:** `{res}`")
-    except ValueError as exc:
-        await ctx.send(f"❌ {exc}")
-
-
-@bot.command(name="mcstatus", brief="Minecraft", usage="mcstatus <address> [bedrock]")
-async def mcstatus_cmd(ctx: commands.Context[SentinelBot], address: str, bedrock: bool = False) -> None:
-    msg = await ctx.send("🔍 Fetching server status...")
-    try:
-        data = await get_minecraft_status(address, bedrock)
-        embed = minecraft_status_embed(address, data, bedrock=bedrock)
-        await msg.edit(content=None, embed=embed)
-    except Exception as exc:
-        await msg.edit(content=f"❌ Error fetching status: {exc}")
-
-
-# -----------------------------------------------------------------------------
-# RUN BOT
-# -----------------------------------------------------------------------------
-
-def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
-    token = os.getenv("DISCORD_TOKEN")
-    if not token:
-        log.critical("DISCORD_TOKEN environment variable is missing.")
+@bot.tree.command(name="ban", description="Ban a member from the server")
+@app_commands.checks.has_permissions(ban_members=True)
+async def slash_ban(interaction: discord.Interaction, member: discord.Member, reason: str | None = None) -> None:
+    block = moderation_block_reason(interaction, member)
+    if block:
+        await interaction.response.send_message(block, ephemeral=True)
         return
-    bot.run(token)
+    r = clean_reason(reason)
+    await member.ban(reason=r)
+    await interaction.response.send_message(f"🔨 Banned {member.mention} | Reason: {r}")
+    await log_action(interaction.guild, "Member Banned", f"User: {member.mention}\nReason: {r}", moderator=interaction.user)
 
+
+@bot.tree.command(name="timeout", description="Timeout/Mute a member")
+@app_commands.checks.has_permissions(moderate_members=True)
+async def slash_timeout(interaction: discord.Interaction, member: discord.Member, minutes: int, reason: str | None = None) -> None:
+    block = moderation_block_reason(interaction, member)
+    if block:
+        await interaction.response.send_message(block, ephemeral=True)
+        return
+    if minutes <= 0 or minutes > MAX_TIMEOUT_MINUTES:
+        await interaction.response.send_message("Duration must be between 1 minute and 28 days.", ephemeral=True)
+        return
+    r = clean_reason(reason)
+    await member.timeout(timedelta(minutes=minutes), reason=r)
+    await interaction.response.send_message(f"🔇 Timed out {member.mention} for {minutes}m | Reason: {r}")
+    await log_action(interaction.guild, "Member Timeout", f"User: {member.mention}\nDuration: {minutes}m\nReason: {r}", moderator=interaction.user)
+
+
+# ==================== MAIN EXECUTION ====================
 
 if __name__ == "__main__":
-    main()
+    logging.basicConfig(level=logging.INFO)
+    token = os.getenv("DISCORD_TOKEN")
+    if not token:
+        log.error("DISCORD_TOKEN environment variable is missing!")
+    else:
+        bot.run(token)
